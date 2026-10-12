@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  pexa-one-data-aws-admin
+
+Parameters:
+
+  PipelineName:
+    Type: String
+
+  Environment:
+    Type: String
+
+  SnowflakeExternalId:
+    Type: String
+
+  SnowflakeUserArn:
+    Type: String
+
+  StageS3BucketName:
+    Type: String  
+  
+  SlackUrl:
+    Type: String
+
+
+Resources:
+
+  LandInsightsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: etl-onedata-landinsights-lamba-role
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: custom
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - s3:*Object*
+                Resource: 
+                  - !Sub arn:aws:s3:::external-storage-land-insights-${AWS::AccountId}-${AWS::Region}/*
+              - Effect: Allow
+                Action: 
+                  - s3:*Object*
+                Resource: 
+                  - !Sub arn:aws:s3:::external-storage-onedata-snowflake-${AWS::AccountId}-${AWS::Region}/*
+                  
+                  
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:Decrypt
+                  - kms:GenerateDataKey*
+                Resource: 
+                  - !ImportValue external-storage-land-insights:kms-key-arn
+                  - !ImportValue external-storage-onedata-snowflake:kms-key-arn
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*onedata*
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*onedata*"
+
+              # - Effect: Allow
+              #   Principal: 
+              #     Service: events.amazonaws.com
+              #   Action: lambda:InvokeFunction
+              #   Resource: EtlOnedataLandinsightsFileCptoSnowflakeStaging
+              #   Condition: 
+              #     ArnLike: 
+              #       "AWS:SourceArn": !GetAtt "S3LandInsightEventBridgeRule.Arn"
+                  
+                
+           
+  ijson:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ijson_python
+      Description: My Lambda Layer to use ijson
+      ContentUri: ../../etl-onedata-land-insights/layers/ijson
+      CompatibleRuntimes:
+        - python3.9
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.9
+
+  OneDataEtlLog:
+    Type: AWS::Serverless::Function 
+    Properties:
+      FunctionName: !Sub "onedata-slack-log"
+      CodeUri: ../../etl-onedata-land-insights/functions/onedata-slack-log/
+      Timeout: 60
+      MemorySize: 4096
+      Handler: onedata-slack-log.lambda_handler
+      Runtime: python3.9
+      Environment:
+        Variables:
+          SLACK_CHANNEL: !Sub ${SlackUrl} 
+      Layers:
+        - !Sub arn:aws:lambda:ap-southeast-2:336392948345:layer:AWSSDKPandas-Python39:11 #this is AWS provided layer. Refer https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html
+      Role: !GetAtt LandInsightsLambdaRole.Arn
+
+  EtlOnedataLandinsightsFileCptoSnowflakeStaging:
+    Type: AWS::Serverless::Function 
+    Properties:
+      FunctionName: !Sub "${PipelineName}-file-cp-to-snowflake-staging"
+      CodeUri: ../../etl-onedata-land-insights/functions/etl-onedata-landinsight-file-cp-to-snowflake-staging/
+      Timeout: 300
+      MemorySize: 4096
+      Handler: etl-onedata-land-insights-file-cp-to-snowflake-staging.lambda_handler
+      Runtime: python3.9
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Environment:
+        Variables:
+          LANDING_BUCKET: !Sub external-storage-land-insights-${AWS::AccountId}-${AWS::Region}
+          RAW_BUCKET: !Sub external-storage-onedata-snowflake-${AWS::AccountId}-${AWS::Region}
+      Layers:
+        - !Sub arn:aws:lambda:ap-southeast-2:336392948345:layer:AWSSDKPandas-Python39:11 #this is AWS provided layer. Refer https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html
+        - !Ref ijson
+      Role: !GetAtt LandInsightsLambdaRole.Arn
+
+       
+  S3LandInsightEventBridgeRule: 
+    Type: AWS::Events::Rule
+    Properties:
+      Name: "etl-onedata-landinsight-s3-event-bridge-rule"
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - "Object Created"
+        detail:
+          bucket:
+            name:
+              - !Sub external-storage-land-insights-${AWS::AccountId}-${AWS::Region}
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EtlOnedataLandinsightsFileCptoSnowflakeStaging.Arn
+          Id: EtlOnedataLandinsightsFileCptoSnowflakeStaging
+
+  EtlOnedataLandinsightsFileCptoSnowflakeStagingPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EtlOnedataLandinsightsFileCptoSnowflakeStaging
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt S3LandInsightEventBridgeRule.Arn
+  
+  # #Permissions
+  # AllowS3ToCallLambdaPermission:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     Action: 'lambda:InvokeFunction'
+  #     FunctionName: !Ref EtlOnedataLandinsightsFileCptoSnowflakeStaging
+  #     Principal: s3.amazonaws.com
+  #     SourceArn: !Sub "arn:aws:s3:::external-storage-land-insights-${AWS::AccountId}-${AWS::Region}"     
+       
+  LandInsightsSnowflakeIntegrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: etl-onedata-land-insights-snowflake-integration-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              AWS: !Ref SnowflakeUserArn
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref SnowflakeExternalId
+      Policies:
+        - PolicyName: custom-snowflake-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: 
+                  - !Sub arn:aws:s3:::${StageS3BucketName}/Processed/*
+              - Effect: Allow
+                Action: 
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: 
+                  - !Sub arn:aws:s3:::${StageS3BucketName}
+                Condition: 
+                  StringLike: 
+                    "s3:prefix": "Processed/*"
+              - Effect: Allow
+                Action: 
+                  - kms:Decrypt
+                Resource: 
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                
+            
+              
+              
+              
+                

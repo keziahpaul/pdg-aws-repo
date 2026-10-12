@@ -1,0 +1,16 @@
+version: 2 
+
+updates: 
+  - package-ecosystem: "github-actions" 
+    directory: "/" 
+    reviewers: 
+      - "pexa-insights/onedata"
+    schedule: 
+      interval: "daily"
+  - package-ecosystem: "pip"
+    directory: "/" 
+    reviewers: 
+      - "pexa-insights/onedata"
+    schedule: 
+      interval: "daily"
+    open-pull-requests-limit: 10

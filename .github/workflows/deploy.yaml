@@ -1,0 +1,225 @@
+name: Deploy ETL resources for Onedata LandInsights integration
+
+on:
+  pull_request:
+    branches:
+      - main
+      - release/*
+
+  push:
+    branches:
+      - main
+      - release/*
+
+env:
+  
+  STACK_NAME_RESOURCES: etl-onedata-land-insights
+  STACK_TEMPLATE_RESOURCES: 'resources'
+
+  AWS_ACCOUNT_DEV: '481949735920' #insights-data-platform-dev
+  AWS_ACCOUNT_TST: '391021066340' #insights-data-platform-tst
+  AWS_ACCOUNT_STG: '793120253878' #insights-data-plarform-stg
+  AWS_ACCOUNT_PRD: '247227199914' #insights-data-platform-prd
+
+  IAM_ASSUME_ROLE_TIMEOUT: '3600'
+  AWS_REGION: 'ap-southeast-2'
+  GITHUB_ARTIFACT_NAME: 'lambda_packages'
+  
+  IAM_ASSUME_ROLE: 'github-etl-onedata-land-insights'
+ 
+permissions:
+  id-token: write   # This is required for requesting the JWT
+  contents: read    # This is required for actions/checkout
+
+jobs:
+
+  security-scan-infracode:
+    name: Security scan (infracode)
+    runs-on: build-small
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Bridgecrew 
+        id: Bridgecrew
+        uses: bridgecrewio/bridgecrew-action@master 
+        env:
+          PRISMA_API_URL: https://api.anz.prismacloud.io
+        with:
+          api-key: ${{ secrets.BC_API_KEY }}
+          quiet: true
+          soft_fail: false
+          skip_check: CKV_AWS_116,CKV_AWS_173,CKV_AWS_115,CKV_AWS_117
+
+  build-artifacts:
+    needs: [security-scan-infracode]
+    name: Build
+    runs-on: build-small
+    
+    steps:
+      - uses: actions/checkout@v4
+       
+      - name: Build SAM artifact
+        run: |
+          sam build --use-container -t cloudformation/templates/${{ env.STACK_TEMPLATE_RESOURCES }}.yaml
+          mv .aws-sam/build/template.yaml .aws-sam/build/${{ env.STACK_TEMPLATE_RESOURCES }}.yaml
+          mv .aws-sam/build/* cloudformation/templates/
+          echo "Package and compress due to the large number of files"
+          tar cf cloudformation.tar.gz -z cloudformation/
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          path: |
+            cloudformation.tar.gz
+          retention-days: 14
+      
+  preview-dev:
+    if: github.base_ref == 'main' && github.event_name == 'pull_request'
+    needs: [ security-scan-infracode, build-artifacts]
+    runs-on: deploy-dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preview
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_DEV }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: false
+          
+  deploy-dev:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [ security-scan-infracode, build-artifacts]
+    runs-on: deploy-dev
+    environment: "development"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_DEV }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: true
+
+
+  preview-test:
+    if: startsWith(github.ref, 'refs/heads/release/')
+    needs: [ security-scan-infracode, build-artifacts]
+    runs-on: deploy-tst
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preview
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_TST }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: false
+          
+  deploy-test:
+    if: startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push'
+    needs: preview-test
+    runs-on: deploy-tst
+    environment: "test"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_TST }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: true
+
+
+  preview-staging:
+    if: startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push'
+    needs: deploy-test
+    runs-on: deploy-stg
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preview
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_STG }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: false
+          
+  deploy-staging:
+    if: startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push'
+    needs: preview-staging
+    runs-on: deploy-stg
+    environment: "staging"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_STG }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: true
+
+
+  preview-prod:
+    if: startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push'
+    needs: deploy-staging
+    runs-on: deploy-prd
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preview
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_PRD }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: false
+          
+  deploy-prod:
+    if: startsWith(github.ref, 'refs/heads/release/') && github.event_name == 'push'
+    needs: preview-prod
+    runs-on: deploy-prd
+    environment: "prod"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        uses: ./.github/actions
+        with:
+          stack: ${{ env.STACK_NAME_RESOURCES }}
+          template: ${{ env.STACK_TEMPLATE_RESOURCES }}
+          account: ${{ env.AWS_ACCOUNT_PRD }}
+          token: ${{ secrets.REPO_ACCESS_GITHUB_ACTIONS }}
+          region: ${{ env.AWS_REGION }}
+          role-timeout: ${{ env.IAM_ASSUME_ROLE_TIMEOUT }}
+          github_artifact_name: ${{ env.GITHUB_ARTIFACT_NAME }}
+          deploy: true

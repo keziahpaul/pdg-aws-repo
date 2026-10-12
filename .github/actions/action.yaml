@@ -1,0 +1,96 @@
+name: 'deploy'
+description: 'Action for deploying Cloudformation stacks and ETL artifactss'
+
+inputs:
+
+  stack: 
+    description: 'Cloudformation stack name'
+    required: true
+
+  template:
+    description: 'Name of Cloudformation template file'
+    required: true
+
+  # parameters:
+  #   description: 'Name of Cloudformation parameters file'
+  #   required: false
+
+  # parameters_inline:
+  #   description: 'Inline parameters'
+
+  # tags:
+  #   description: 'Name of Cloudformation tags file'
+  #   required: false
+
+  # tags_inline:
+  #   description: 'Inline tags'
+
+  deploy: 
+    description: 'Changeset will not be executed if set to false.'
+    required: true
+    default: false
+
+  account:
+    description: 'AWS ACCOUNT ID'
+    required: true
+
+  region:
+    description: 'AWS REGION'
+    required: false
+    default: 'ap-southeast-2'
+
+  role-timeout:
+    description: 'IAM ASSUME ROLE TIMEOUT'
+    required: false
+    default: '3600'
+
+  token:
+    description: 'GITHUB RUNNER TOKEN'
+    required: true
+
+  python_version:
+    description: Glue version of Python for ETLs
+    default: '3.6.13'
+
+  github_artifact_name:
+    description: 'GITHUB ARTIFACT'
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.github_artifact_name }}
+        path: artifacts
+
+    - name: Extract Package
+      shell: bash
+      run: tar x -f artifacts/cloudformation.tar.gz -z
+
+    - uses: actions/checkout@v4
+      with:
+        repository: pexa-insights/github-action-insights-cfn
+        ref: v2
+        token: ${{ inputs.token }}
+        path: .github/actions/insights-cfn
+
+    - name: Assume IAM Deploy Role
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account }}:role/github-${{ github.event.repository.name }}
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: ${{ inputs.role-timeout }}
+
+    - name: Create Cloudformation stack
+      uses: ./.github/actions/insights-cfn
+      with:
+        stack: ${{ inputs.stack }}
+        template: ${{ inputs.template }} 
+        deploy:  ${{ inputs.deploy }}
+    
+    - name: Cleanup layer packages
+      shell: bash
+      run: |
+          rm -rf $GITHUB_WORKSPACE/cloudformation
