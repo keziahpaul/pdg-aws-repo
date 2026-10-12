@@ -65,7 +65,7 @@ jobs:
           echo "Package and compress due to the large number of files"
           tar cf cloudformation.tar.gz -z cloudformation/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ success() }}
         with:
           name: ${{ env.GITHUB_ARTIFACT_NAME }}
