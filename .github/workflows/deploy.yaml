@@ -37,7 +37,7 @@ jobs:
     name: Security scan (infracode)
     runs-on: build-small
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run Bridgecrew 
         id: Bridgecrew
         uses: bridgecrewio/bridgecrew-action@master 
@@ -55,7 +55,7 @@ jobs:
     runs-on: build-small
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
        
       - name: Build SAM artifact
         run: |
@@ -78,7 +78,7 @@ jobs:
     needs: [ security-scan-infracode, build-artifacts]
     runs-on: deploy-dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Preview
         uses: ./.github/actions
         with:
@@ -97,7 +97,7 @@ jobs:
     runs-on: deploy-dev
     environment: "development"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         uses: ./.github/actions
         with:
@@ -116,7 +116,7 @@ jobs:
     needs: [ security-scan-infracode, build-artifacts]
     runs-on: deploy-tst
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Preview
         uses: ./.github/actions
         with:
@@ -135,7 +135,7 @@ jobs:
     runs-on: deploy-tst
     environment: "test"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         uses: ./.github/actions
         with:
@@ -154,7 +154,7 @@ jobs:
     needs: deploy-test
     runs-on: deploy-stg
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Preview
         uses: ./.github/actions
         with:
@@ -173,7 +173,7 @@ jobs:
     runs-on: deploy-stg
     environment: "staging"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         uses: ./.github/actions
         with:
@@ -192,7 +192,7 @@ jobs:
     needs: deploy-staging
     runs-on: deploy-prd
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Preview
         uses: ./.github/actions
         with:
@@ -211,7 +211,7 @@ jobs:
     runs-on: deploy-prd
     environment: "prod"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         uses: ./.github/actions
         with:
